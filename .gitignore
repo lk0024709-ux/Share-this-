@@ -1,0 +1,16 @@
+# Gradle / Android
+.gradle/
+build/
+app/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Keystore — NEVER commit release keys. CI injects them via secrets.
+*.jks
+*.keystore
+app/release.keystore
+
+# Snapshot-excluded / generated
+node_modules/
