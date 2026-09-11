@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <declare-styleable name="RadialProgressView">
+        <attr name="trackColor" format="color" />
+        <attr name="progressColor" format="color" />
+        <attr name="progressStroke" format="dimension" />
+        <attr name="labelColor" format="color" />
+        <attr name="labelSize" format="dimension" />
+    </declare-styleable>
+</resources>
