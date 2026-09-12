@@ -70,6 +70,17 @@ android {
         viewBinding = true
     }
 
+    testOptions {
+        // Unit tests create files with unicode names (Hindi, emoji) — pin a
+        // UTF-8 locale so the forked test JVMs behave identically on every
+        // machine/CI runner regardless of the host locale.
+        unitTests.all {
+            it.environment("LANG", "C.UTF-8")
+            it.environment("LC_ALL", "C.UTF-8")
+            it.systemProperty("file.encoding", "UTF-8")
+        }
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"

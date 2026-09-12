@@ -96,6 +96,42 @@ object QrCodePayloadHandler {
         return QrPayload.fromJson(json)
     }
 
+    // ------------------------------------------------------------- v2 scanning
+
+    /**
+     * Result of scanning an arbitrary QR text with the v2 codec first and
+     * the v1 codec as compatibility fallback (a v1 code still joins the
+     * hotspot; the encrypted transfer itself then reports an incompatible
+     * protocol version from the engine, with a friendly message).
+     */
+    sealed interface ScanResult {
+        /** Current payload: session id, PIN, public key, endpoint, expiry. */
+        data class V2(val payload: PairingPayload.Payload) : ScanResult
+        /** Legacy payload: hotspot credentials only (pre-v2 app on the receiver). */
+        data class V1(val payload: QrPayload) : ScanResult
+        /** A ShareThis code whose major version is newer than we understand. */
+        data class Incompatible(val foundVersion: Int) : ScanResult
+        /** A valid ShareThis code whose TTL elapsed — ask for a fresh one. */
+        data object Expired : ScanResult
+        /** Not a ShareThis code at all. */
+        data object NotShareThis : ScanResult
+        /** ShareThis-shaped but malformed (corrupted render / partial scan). */
+        data object Malformed : ScanResult
+    }
+
+    fun scan(rawText: String): ScanResult {
+        when (val result = PairingPayload.decode(rawText)) {
+            is PairingPayload.DecodeResult.Ok -> return ScanResult.V2(result.payload)
+            is PairingPayload.DecodeResult.Expired -> return ScanResult.Expired
+            is PairingPayload.DecodeResult.WrongVersion ->
+                return ScanResult.Incompatible(result.found)
+            is PairingPayload.DecodeResult.Malformed -> return ScanResult.Malformed
+            PairingPayload.DecodeResult.NotShareThis -> Unit // fall through to v1
+        }
+        decodePayload(rawText)?.let { return ScanResult.V1(it) }
+        return ScanResult.NotShareThis
+    }
+
     // ------------------------------------------------------- bitmap rendering
 
     @Throws(Exception::class)

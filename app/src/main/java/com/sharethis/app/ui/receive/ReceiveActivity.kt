@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
 import com.sharethis.app.core.engine.TransferProgress
+import com.sharethis.app.core.pairing.PairingPayload
 import com.sharethis.app.core.pairing.QrCodePayloadHandler
 import com.sharethis.app.core.permissions.PermissionManager
 import com.sharethis.app.data.enums.TransferState
@@ -34,6 +35,7 @@ class ReceiveActivity : AppCompatActivity() {
     private var sessionActive = false
     private var btStandbyOn = false
     private var serverStarted = false
+    private var sessionInfo: TransferViewModel.ReceiverSessionInfo? = null
 
     private val wifiPermLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
@@ -184,12 +186,20 @@ class ReceiveActivity : AppCompatActivity() {
                 binding.tvWaitingStatus.text = state.message
             }
             is PairingViewModel.PairingUiState.HotspotReady -> {
-                renderHotspot(state.config)
-                pairingVM.listenForSender()
                 if (!serverStarted) {
+                    val pin = pairingVM.pinCode.value
+                    if (pin == null) {
+                        pairingVM.setIdle()
+                        toast("Could not create a session — tap Start again")
+                        return
+                    }
                     serverStarted = true
-                    transferVM.startReceiving(state.config.port)
+                    val info = transferVM.prepareReceiverSession(pin, state.config.port)
+                    sessionInfo = info
+                    pairingVM.listenForSender(info.sessionId, info.receiverChallenge)
+                    transferVM.startReceiving()
                 }
+                renderHotspot(state.config)
             }
             is PairingViewModel.PairingUiState.SenderMatched -> {
                 binding.tvWaitingStatus.text = "Sender matched: ${state.deviceName} — transfer starting…"
@@ -215,12 +225,30 @@ class ReceiveActivity : AppCompatActivity() {
         binding.tvWaitingStatus.text =
             "Sender: join ${config.ssid}, then enter PIN or scan QR"
 
+        val info = sessionInfo
+        if (info == null) {
+            // Hotspot restarted without a session — fall back to credentials QR.
+            lifecycleScope.launch(Dispatchers.Default) {
+                val legacy = QrCodePayloadHandler.QrPayload.fromNetworkConfig(config)
+                val bitmap = try {
+                    QrCodePayloadHandler.encodeToBitmap(
+                        QrCodePayloadHandler.encodePayload(legacy), 640
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+                withContext(Dispatchers.Main) {
+                    if (bitmap != null) binding.ivQr.setImageBitmap(bitmap)
+                }
+            }
+            return
+        }
+
+        // v2 QR: session id + PIN + receiver public key + endpoint + expiry.
         lifecycleScope.launch(Dispatchers.Default) {
-            val payload = QrCodePayloadHandler.QrPayload.fromNetworkConfig(config)
+            val payload = pairingVM.buildPairingPayload(info)
             val bitmap = try {
-                QrCodePayloadHandler.encodeToBitmap(
-                    QrCodePayloadHandler.encodePayload(payload), 640
-                )
+                QrCodePayloadHandler.encodeToBitmap(PairingPayload.encode(payload), 640)
             } catch (_: Exception) {
                 null
             }
@@ -245,7 +273,9 @@ class ReceiveActivity : AppCompatActivity() {
                 binding.btnStopReceive.visibility = View.GONE
                 binding.btnStartReceive.visibility = View.VISIBLE
             }
-            TransferState.ERROR -> {
+            TransferState.ERROR, TransferState.CONNECTION_FAILED,
+            TransferState.AUTHENTICATION_FAILED, TransferState.TRANSFER_FAILED,
+            TransferState.VERIFICATION_FAILED, TransferState.PAIRING_FAILED -> {
                 binding.tvWaitingStatus.text = "Transfer failed — tap Start to host again"
                 binding.btnStopReceive.visibility = View.GONE
                 binding.btnStartReceive.visibility = View.VISIBLE
@@ -275,8 +305,9 @@ class ReceiveActivity : AppCompatActivity() {
             binding.btnBtStandby.text = "Bluetooth standby: off"
             return
         }
-        if (pairingVM.hotspotConfig.value == null) {
-            toast("Start receiving first — Bluetooth shares the hotspot credentials")
+        val info = sessionInfo
+        if (pairingVM.hotspotConfig.value == null || info == null) {
+            toast("Start receiving first — Bluetooth shares the pairing payload")
             return
         }
         if (!pairingVM.isBluetoothSupported()) {
@@ -287,7 +318,8 @@ class ReceiveActivity : AppCompatActivity() {
             ensureBtEnabled {
                 btStandbyOn = true
                 binding.btnBtStandby.text = "Bluetooth standby: ON"
-                pairingVM.startBluetoothStandby()
+                val payload = pairingVM.buildPairingPayload(info)
+                pairingVM.startBluetoothStandby(PairingPayload.toJson(payload))
                 // Best-effort discoverability so the sender's scan can find us.
                 try {
                     discoverableLauncher.launch(pairingVM.bluetoothDiscoverableIntent())
@@ -349,4 +381,5 @@ class ReceiveActivity : AppCompatActivity() {
     private fun toast(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
+
 }

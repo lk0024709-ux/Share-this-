@@ -36,6 +36,11 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- Foreground transfer service (screen-off / backgrounded transfers). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Storage: legacy paths only (SAF/MediaStore need no permission). -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
@@ -99,6 +104,11 @@
             android:name=".ui.send.QrScannerActivity"
             android:exported="false"
             android:screenOrientation="portrait" />
+
+        <service
+            android:name=".core.service.TransferForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
     </application>
 

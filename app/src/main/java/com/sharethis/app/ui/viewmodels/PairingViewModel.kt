@@ -8,8 +8,10 @@ import com.sharethis.app.core.engine.FastTransferEngine
 import com.sharethis.app.core.network.NetworkBandManager
 import com.sharethis.app.core.network.PinPairingEngine
 import com.sharethis.app.core.pairing.BluetoothPairingManager
+import com.sharethis.app.core.pairing.PairingPayload
 import com.sharethis.app.core.pairing.QrCodePayloadHandler
 import com.sharethis.app.data.enums.PairingMode
+import com.sharethis.app.data.models.ConnectTarget
 import com.sharethis.app.data.models.DevicePeer
 import com.sharethis.app.data.models.NetworkConfig
 import kotlinx.coroutines.Dispatchers
@@ -19,15 +21,25 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Owns all three pairing transports: PIN broadcast, QR payloads and the
- * Bluetooth handshake — plus hotspot start/stop on the receiver.
+ * Owns all pairing transports — PIN broadcast, QR payloads, the Bluetooth
+ * handshake and hotspot start/stop on the receiver.
+ *
+ * v2: every successful pairing produces a [ConnectTarget] carrying the
+ * session id, PIN (always bound into the key derivation) and, when the
+ * channel was out-of-band (QR / Bluetooth), the receiver's ephemeral public
+ * key — so the TCP handshake can authenticate against a MITM substitution.
  */
 class PairingViewModel(app: Application) : AndroidViewModel(app) {
 
     sealed interface PairingUiState {
         data object Idle : PairingUiState
         data class Working(val message: String) : PairingUiState
-        data class PeerFound(val peer: DevicePeer, val via: PairingMode) : PairingUiState
+        data class PeerFound(
+            val peer: DevicePeer,
+            val via: PairingMode,
+            /** v2: endpoint + session material for the encrypted handshake. */
+            val target: ConnectTarget? = null
+        ) : PairingUiState
         data class HotspotReady(val config: NetworkConfig) : PairingUiState
         data class SenderMatched(val deviceName: String) : PairingUiState
         data class Failed(val message: String) : PairingUiState
@@ -49,6 +61,10 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
     val btDiscovered: StateFlow<List<BluetoothPairingManager.BtDevice>> = btManager.discovered
     val btDiscovering: StateFlow<Boolean> = btManager.discovering
 
+    /** Last connect target produced by a pairing flow (consumed on send). */
+    private val _lastTarget = MutableStateFlow<ConnectTarget?>(null)
+    val lastTarget: StateFlow<ConnectTarget?> = _lastTarget
+
     private var pinJob: Job? = null
     private var btJob: Job? = null
 
@@ -57,6 +73,8 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
     fun is5GhzCapable(): Boolean = netBand.is5GHzSupported()
 
     fun bandSummary(): String = netBand.bandSummary()
+
+    fun deviceName(): String = netBand.deviceName()
 
     fun prepareReceiver(tcpPort: Int = FastTransferEngine.DEFAULT_TCP_PORT) {
         viewModelScope.launch {
@@ -75,8 +93,39 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Background PIN listener — informational (receiver hosts the server). */
-    fun listenForSender(timeoutMs: Long = 300_000L) {
+    /**
+     * Builds the v2 pairing payload (session id, PIN, receiver public key,
+     * endpoint, hotspot credentials, expiry) for the QR code and the
+     * Bluetooth standby channel. [sessionInfo] comes from
+     * [TransferViewModel.prepareReceiverSession].
+     */
+    fun buildPairingPayload(
+        sessionInfo: TransferViewModel.ReceiverSessionInfo
+    ): PairingPayload.Payload {
+        val config = _hotspotConfig.value ?: NetworkConfig(
+            ssid = "", passphrase = "", ipAddress = "0.0.0.0", port = sessionInfo.port
+        )
+        return PairingPayload.build(
+            sessionId = sessionInfo.sessionId,
+            challenge = sessionInfo.receiverChallenge,
+            pin = sessionInfo.pin,
+            receiverPublicKey = sessionInfo.receiverPublicKey,
+            ipAddress = config.ipAddress,
+            port = sessionInfo.port,
+            ssid = config.ssid,
+            passphrase = config.passphrase,
+            band = config.band,
+            deviceName = netBand.deviceName(),
+            security = config.security
+        )
+    }
+
+    /** Background PIN listener — replies to senders matching our session. */
+    fun listenForSender(
+        sessionId: Long,
+        challenge: ByteArray,
+        timeoutMs: Long = 300_000L
+    ) {
         pinJob?.cancel()
         val pin = _pinCode.value ?: return
         val config = _hotspotConfig.value ?: return
@@ -86,6 +135,8 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
                 tcpPort = config.port,
                 deviceName = netBand.deviceName(),
                 band = config.band,
+                sessionId = sessionId,
+                challenge = challenge,
                 timeoutMs = timeoutMs
             )
             if (sender != null) {
@@ -94,14 +145,12 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Receiver-side Bluetooth standby: push hotspot payload to one sender. */
-    fun startBluetoothStandby() {
+    /** Receiver-side Bluetooth standby: push the v2 payload to one sender. */
+    fun startBluetoothStandby(pairingPayloadJson: String) {
         btJob?.cancel()
-        val config = _hotspotConfig.value ?: return
-        val payload = QrCodePayloadHandler.QrPayload.fromNetworkConfig(config).toJson()
         btJob = viewModelScope.launch {
             _uiState.value = PairingUiState.Working("Bluetooth standby — waiting for sender…")
-            when (val result = btManager.hostAndSendConfig(payload)) {
+            when (val result = btManager.hostAndSendConfig(pairingPayloadJson)) {
                 is BluetoothPairingManager.BtResult.ConfigSent ->
                     _uiState.value = PairingUiState.SenderMatched(result.deviceName)
                 is BluetoothPairingManager.BtResult.Failed ->
@@ -129,7 +178,15 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             if (offer != null) {
-                _uiState.value = PairingUiState.PeerFound(offer.peer, PairingMode.PIN_CODE)
+                _lastTarget.value = ConnectTarget(
+                    host = offer.peer.ipAddress,
+                    port = offer.peer.port,
+                    sessionId = offer.sessionId,
+                    pin = pin,
+                    transportLabel = "PIN"
+                )
+                _uiState.value =
+                    PairingUiState.PeerFound(offer.peer, PairingMode.PIN_CODE, _lastTarget.value)
             } else {
                 _uiState.value = PairingUiState.Failed(
                     "No receiver answered — join its hotspot, then check the PIN"
@@ -138,6 +195,62 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * v2 payload (QR / Bluetooth): join the receiver hotspot when the payload
+     * carries one, then surface the connect target with the receiver's
+     * authenticated public key for the ECDH handshake.
+     */
+    fun joinFromPairing(payload: PairingPayload.Payload, via: PairingMode) {
+        viewModelScope.launch {
+            val peer = DevicePeer(
+                deviceName = payload.deviceName.ifEmpty { payload.ipAddress },
+                ipAddress = payload.ipAddress,
+                port = payload.port,
+                band = payload.band,
+                pairingMode = via
+            )
+            val target = ConnectTarget(
+                host = payload.ipAddress,
+                port = payload.port,
+                sessionId = payload.sessionId,
+                pin = payload.pin,
+                receiverPublicKey = payload.receiverPublicKey,
+                receiverChallenge = payload.challenge,
+                authMode = if (payload.receiverPublicKey != null) {
+                    ConnectTarget.AuthMode.PRE_SHARED_KEY
+                } else {
+                    ConnectTarget.AuthMode.PIN
+                },
+                transportLabel = via.title
+            )
+            if (payload.ssid.isBlank()) {
+                // Same-LAN receiver (no hotspot join needed).
+                _lastTarget.value = target
+                _uiState.value = PairingUiState.PeerFound(peer, via, target)
+                return@launch
+            }
+            _uiState.value = PairingUiState.Working("Joining ${payload.ssid}…")
+            val config = NetworkConfig(
+                ssid = payload.ssid,
+                passphrase = payload.passphrase,
+                ipAddress = payload.ipAddress,
+                port = payload.port,
+                band = payload.band,
+                deviceName = payload.deviceName,
+                security = payload.security
+            )
+            when (val result = netBand.connectToHotspot(config)) {
+                is NetworkBandManager.JoinResult.Connected -> {
+                    _lastTarget.value = target
+                    _uiState.value = PairingUiState.PeerFound(peer, via, target)
+                }
+                is NetworkBandManager.JoinResult.Failed ->
+                    _uiState.value = PairingUiState.Failed(result.reason)
+            }
+        }
+    }
+
+    /** Legacy (v1) QR payload — hotspot credentials only, PIN flow follows. */
     fun joinHotspotPayload(payload: QrCodePayloadHandler.QrPayload, via: PairingMode) {
         viewModelScope.launch {
             _uiState.value = PairingUiState.Working("Joining ${payload.ssid}…")
@@ -150,7 +263,7 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
                         band = payload.band,
                         pairingMode = via
                     )
-                    _uiState.value = PairingUiState.PeerFound(peer, via)
+                    _uiState.value = PairingUiState.PeerFound(peer, via, null)
                 }
                 is NetworkBandManager.JoinResult.Failed ->
                     _uiState.value = PairingUiState.Failed(result.reason)
@@ -163,11 +276,24 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = PairingUiState.Working("Bluetooth handshake…")
             when (val result = btManager.connectAndReceiveConfig(address)) {
                 is BluetoothPairingManager.BtResult.ConfigReceived -> {
-                    val payload = QrCodePayloadHandler.QrPayload.fromJson(result.payloadJson)
-                    if (payload == null) {
-                        _uiState.value = PairingUiState.Failed("Sender sent a bad handshake")
+                    // v2 payload first (carries the session crypto material).
+                    val payload = PairingPayload.decode(result.payloadJson)
+                    val v2 = payload as? PairingPayload.DecodeResult.Ok
+                    if (v2 != null) {
+                        if (v2.payload.isExpired) {
+                            _uiState.value = PairingUiState.Failed(
+                                "The receiver's pairing window expired — ask it to restart standby"
+                            )
+                        } else {
+                            joinFromPairing(v2.payload, PairingMode.BLUETOOTH)
+                        }
+                        return@launch
+                    }
+                    val legacy = QrCodePayloadHandler.QrPayload.fromJson(result.payloadJson)
+                    if (legacy == null) {
+                        _uiState.value = PairingUiState.Failed("Receiver sent a bad handshake")
                     } else {
-                        joinHotspotPayload(payload, PairingMode.BLUETOOTH)
+                        joinHotspotPayload(legacy, PairingMode.BLUETOOTH)
                     }
                 }
                 is BluetoothPairingManager.BtResult.Failed ->
@@ -209,6 +335,7 @@ class PairingViewModel(app: Application) : AndroidViewModel(app) {
         netBand.disconnectFromHotspot()
         _pinCode.value = null
         _hotspotConfig.value = null
+        _lastTarget.value = null
         _uiState.value = PairingUiState.Idle
     }
 

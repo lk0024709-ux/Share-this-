@@ -12,7 +12,11 @@ data class TransferProgress(
     val bytesPerSecond: Long = 0L,
     val fileName: String = "",
     val filesCompleted: Int = 0,
-    val filesTotal: Int = 0
+    val filesTotal: Int = 0,
+    val filesVerified: Int = 0,
+    val filesFailed: Int = 0,
+    val verifying: Boolean = false,
+    val transportLabel: String = ""
 ) {
     val mbPerSecond: Double
         get() = bytesPerSecond / (1024.0 * 1024.0)
