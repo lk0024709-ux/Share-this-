@@ -112,7 +112,13 @@ elif command -v xsel >/dev/null 2>&1; then
   tr -d '\n\r' < "$B64_FILE" | xsel --clipboard --input && echo "(Base64 copied to clipboard via xsel)"
 fi
 
-B64_LEN=$(wc -c < "$B64_FILE" | tr -d ' ')
+# Report the number of characters the user actually pastes into the
+# ANDROID_KEYSTORE_BASE64 secret. Line 104 appends a trailing newline to the
+# file (so it is a well-formed POSIX text file), and `wc -c` counts that byte:
+# the old value was therefore always 1 too high and did not match what the
+# PowerShell twin prints ($base64.Length), which made "did I paste the whole
+# thing?" impossible to verify by character count.
+B64_LEN=$(tr -d '\n\r' < "$B64_FILE" | wc -c | tr -d ' ')
 
 # ---------------------------------------------------------------------- report
 cat <<EOF
