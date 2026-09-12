@@ -104,7 +104,9 @@ class TransferForegroundService : Service() {
         fun update(context: Context, state: TransferState, progress: TransferProgress) {
             val appContext = context.applicationContext
             try {
-                val nm = appContext.getSystemService(NotificationManager::class.java) ?: return
+                val nm =
+                    appContext.getSystemService(Context.NOTIFICATION_SERVICE)
+                        as? NotificationManager ?: return
                 nm.notify(NOTIFICATION_ID, buildNotification(appContext, state, progress))
             } catch (_: Exception) { /* notification updates are best-effort */ }
         }
@@ -117,8 +119,8 @@ class TransferForegroundService : Service() {
                 )
             } catch (_: Exception) { }
             try {
-                appContext.getSystemService(NotificationManager::class.java)
-                    ?.cancel(NOTIFICATION_ID)
+                (appContext.getSystemService(Context.NOTIFICATION_SERVICE)
+                    as? NotificationManager)?.cancel(NOTIFICATION_ID)
             } catch (_: Exception) { }
         }
 
@@ -198,8 +200,8 @@ class TransferForegroundService : Service() {
                     description = "Shows progress while files are being sent or received"
                     setShowBadge(false)
                 }
-                context.getSystemService(NotificationManager::class.java)
-                    ?.createNotificationChannel(channel)
+                (context.getSystemService(Context.NOTIFICATION_SERVICE)
+                    as? NotificationManager)?.createNotificationChannel(channel)
             }
         }
     }

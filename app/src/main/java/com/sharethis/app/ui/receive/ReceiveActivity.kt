@@ -10,7 +10,6 @@ import androidx.lifecycle.lifecycleScope
 import com.sharethis.app.core.engine.TransferProgress
 import com.sharethis.app.core.pairing.PairingPayload
 import com.sharethis.app.core.pairing.QrCodePayloadHandler
-import com.sharethis.app.ui.viewmodels.TransferViewModel
 import com.sharethis.app.core.permissions.PermissionManager
 import com.sharethis.app.data.enums.TransferState
 import com.sharethis.app.data.models.NetworkConfig
