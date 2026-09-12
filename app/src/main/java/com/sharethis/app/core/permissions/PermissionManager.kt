@@ -45,6 +45,19 @@ object PermissionManager {
 
     fun cameraPermission(): Array<String> = arrayOf(Manifest.permission.CAMERA)
 
+    /**
+     * Runtime notification permission (API 33+) for the transfer foreground
+     * service notification. Below 33 no runtime grant is needed; if denied
+     * on 33+ the service still runs — the progress notification is simply
+     * not shown (no dead end).
+     */
+    fun notificationPermission(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            emptyArray()
+        }
+
     /** Only used for legacy (API ≤ 28) receive-to-Downloads. */
     fun legacyWritePermission(): Array<String> =
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {

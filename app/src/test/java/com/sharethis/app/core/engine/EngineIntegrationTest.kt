@@ -50,7 +50,7 @@ class EngineIntegrationTest {
         fun newEngine(cfg: FastTransferEngine.EngineConfig = FastTransferEngine.EngineConfig()) =
             FastTransferEngine(cfg)
 
-        fun newSession(engine: FastTransferEngine): FastTransferEngine.ReceiverSession =
+        fun newSession(@Suppress("UNUSED_PARAMETER") engine: FastTransferEngine): FastTransferEngine.ReceiverSession =
             FastTransferEngine.ReceiverSession(
                 sessionId, pin, challenge, keyPair, spoolRoot,
                 "Receiver", "2.0.0-test"

@@ -12,7 +12,9 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import com.sharethis.app.core.engine.TransferProgress
 import com.sharethis.app.core.network.PinPairingEngine
 import com.sharethis.app.core.pairing.BluetoothPairingManager
+import com.sharethis.app.core.pairing.PairingPayload
 import com.sharethis.app.core.pairing.QrCodePayloadHandler
+import com.sharethis.app.data.models.ConnectTarget
 import com.sharethis.app.core.permissions.PermissionManager
 import com.sharethis.app.core.storage.StorageBridge
 import com.sharethis.app.data.enums.PairingMode
@@ -55,6 +57,7 @@ class SendActivity : AppCompatActivity() {
     private lateinit var btAdapter: SimpleBtAdapter
 
     private var peer: DevicePeer? = null
+    private var connectTarget: ConnectTarget? = null
     private var currentStep = STEP_FILES
     private var pairingMode = PairingMode.PIN_CODE
     private var transferInFlight = false
@@ -155,6 +158,7 @@ class SendActivity : AppCompatActivity() {
             transferVM.reset()
             pairingVM.setIdle()
             peer = null
+            connectTarget = null
             transferInFlight = false
             showStep(STEP_FILES)
         }
@@ -268,15 +272,38 @@ class SendActivity : AppCompatActivity() {
     }
 
     private fun handleQrText(text: String) {
-        val payload = QrCodePayloadHandler.decodePayload(text)
-        if (payload == null) {
-            toast("That is not a ShareThis code")
-            return
-        }
-        ensureWifiPermissions {
-            binding.tvPeerBanner.visibility = View.VISIBLE
-            binding.tvPeerBanner.text = "QR accepted — joining ${payload.ssid}…"
-            pairingVM.joinHotspotPayload(payload, PairingMode.QR_CODE)
+        when (val scan = QrCodePayloadHandler.scan(text)) {
+            is QrCodePayloadHandler.ScanResult.V2 -> {
+                val payload = scan.payload
+                ensureWifiPermissions {
+                    binding.tvPeerBanner.visibility = View.VISIBLE
+                    binding.tvPeerBanner.text = if (payload.ssid.isBlank()) {
+                        "QR accepted — connecting on this network…"
+                    } else {
+                        "QR accepted — joining ${payload.ssid}…"
+                    }
+                    pairingVM.joinFromPairing(payload, PairingMode.QR_CODE)
+                }
+            }
+            is QrCodePayloadHandler.ScanResult.V1 -> {
+                // Legacy receiver (pre-v2 app): join its hotspot; the
+                // encrypted handshake will then report incompatible versions
+                // with a friendly message if it really is too old.
+                val payload = scan.payload
+                ensureWifiPermissions {
+                    binding.tvPeerBanner.visibility = View.VISIBLE
+                    binding.tvPeerBanner.text = "QR accepted — joining ${payload.ssid}…"
+                    pairingVM.joinHotspotPayload(payload, PairingMode.QR_CODE)
+                }
+            }
+            QrCodePayloadHandler.ScanResult.Expired ->
+                toast("That code expired — ask the receiver to show a fresh one")
+            is QrCodePayloadHandler.ScanResult.Incompatible ->
+                toast("The receiver runs a newer ShareThis — update this app to transfer")
+            QrCodePayloadHandler.ScanResult.Malformed ->
+                toast("That code could not be read — try again or move closer")
+            QrCodePayloadHandler.ScanResult.NotShareThis ->
+                toast("That is not a ShareThis code")
         }
     }
 
@@ -370,6 +397,7 @@ class SendActivity : AppCompatActivity() {
             }
             is PairingViewModel.PairingUiState.PeerFound -> {
                 peer = state.peer
+                connectTarget = state.target
                 pairingVM.stopBtDiscovery()
                 binding.tvPeerBanner.visibility = View.VISIBLE
                 binding.tvPeerBanner.text =
@@ -392,7 +420,13 @@ class SendActivity : AppCompatActivity() {
     }
 
     private fun startTransfer() {
-        val target = peer ?: return
+        val target = connectTarget
+        if (target == null) {
+            // Legacy (v1) pairing produced no session target — the receiver
+            // runs an incompatible version.
+            toast("This receiver uses an older ShareThis — update it, then pair again")
+            return
+        }
         if (fileEntries.isEmpty() || transferInFlight) return
         transferInFlight = true
         showStep(STEP_TRANSFER)
@@ -407,12 +441,14 @@ class SendActivity : AppCompatActivity() {
             TransferState.COMPLETED -> {
                 transferInFlight = false
                 val progress = transferVM.progress.value
-                binding.tvDoneTitle.text = "Sent ${progress.filesTotal} file(s)"
+                binding.tvDoneTitle.text = "Sent ${progress.filesVerified} of ${progress.filesTotal} file(s)"
                 binding.tvDoneSummary.text =
                     "${formatBytes(progress.totalBytes)} delivered to ${peer?.deviceName ?: "receiver"}"
                 showStep(STEP_DONE)
             }
-            TransferState.ERROR -> {
+            TransferState.ERROR, TransferState.CONNECTION_FAILED,
+            TransferState.AUTHENTICATION_FAILED, TransferState.TRANSFER_FAILED,
+            TransferState.VERIFICATION_FAILED, TransferState.PAIRING_FAILED -> {
                 transferInFlight = false
                 showStep(STEP_PAIRING)
             }

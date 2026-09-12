@@ -105,6 +105,28 @@ class StorageBridge(private val context: Context) {
         )
     }
 
+    /**
+     * Exact byte length of [uri], or -1 when the provider cannot report one
+     * (some streaming/cloud providers). 0 means a genuinely empty file.
+     */
+    fun exactSizeBytes(uri: Uri): Long {
+        if (uri.scheme == "file") {
+            return try {
+                val f = File(uri.path!!)
+                if (f.exists()) f.length() else -1L
+            } catch (_: Exception) {
+                -1L
+            }
+        }
+        return try {
+            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { fd ->
+                if (fd.length >= 0) fd.length else -1L
+            } ?: -1L
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
     // ----------------------------------------------------------------- write
 
     /**
