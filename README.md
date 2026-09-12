@@ -25,7 +25,7 @@ Supports **Android 5.0 (API 21) → Android 15+ (API 35)** from one codebase.
 ```
 ShareThis/
 ├── .github/workflows/build-apk.yml      # CI: test → debug+release APK → GitHub Release on tags
-├── gradle/wrapper/                      # wrapper (jar bootstrapped automatically in CI)
+├── gradlew / gradlew.bat / gradle/wrapper/  # Gradle 8.9 wrapper, fully committed (jar included)
 ├── build.gradle.kts / settings.gradle.kts / gradle.properties
 ├── app/
 │   ├── build.gradle.kts                 # minSdk 21 · targetSdk 35 · Java 17
@@ -78,8 +78,9 @@ ShareThis/
 Requirements: **JDK 17** + Android SDK (API 35 platform, build-tools 35).
 
 ```bash
-# first run only (needs network once): generate the wrapper jar
-gradle wrapper --gradle-version 8.9   # or download any Gradle 8.7+ distro
+# The wrapper is committed (gradlew + gradle/wrapper/gradle-wrapper.jar for Gradle 8.9),
+# so a fresh clone needs only JDK 17 — the wrapper fetches the distribution itself.
+./gradlew --version                   # sanity check: prints Gradle 8.9
 
 ./gradlew testDebugUnitTest           # unit tests
 ./gradlew assembleDebug               # app/build/outputs/apk/debug/app-debug.apk
@@ -100,7 +101,10 @@ KEY_PASSWORD=***
 `.github/workflows/build-apk.yml` runs on every push/PR and on `v*` tags:
 
 1. JDK 17 + Android SDK 35 setup
-2. Bootstrap `gradle-wrapper.jar` if absent (official `services.gradle.org` distro)
+2. Verify the committed Gradle 8.9 wrapper (`chmod +x gradlew`, `./gradlew --version`) and
+   fall back to generating `gradle-wrapper.jar` from the official `services.gradle.org`
+   distro if a branch ever loses it. `gradle/actions/setup-gradle@v4` additionally checks
+   the wrapper jar against Gradle's published checksums.
 3. Unit tests → debug APK → release APK
 4. Artifacts uploaded (debug 14d, release 30d, test report 7d)
 5. **On `v*` tags**: APKs published to GitHub Releases with generated notes
