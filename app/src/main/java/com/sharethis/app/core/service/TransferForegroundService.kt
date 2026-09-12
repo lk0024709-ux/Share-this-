@@ -171,7 +171,7 @@ class TransferForegroundService : Service() {
                 .setContentIntent(contentIntent)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-                .setSilent()
+                .setSilent(true)
                 .setProgress(100, progress.percent, progress.totalBytes <= 0L)
                 .addAction(0, "Cancel", cancelIntent)
                 .build()
