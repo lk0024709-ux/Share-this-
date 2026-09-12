@@ -107,23 +107,44 @@ KEY_PASSWORD=***
 
 ### Signed release APKs (optional, recommended)
 
-Without secrets the release APK builds **unsigned**. For signed releases add
+Without secrets the release APK builds **unsigned**. The fastest path is the
+one-click generator — it creates the keystore, prints all four secret values,
+and copies the Base64 to your clipboard (also saved as `*.base64.txt`):
+
+```bash
+# Linux / macOS
+./scripts/generate-keystore.sh
+```
+
+```powershell
+# Windows (PowerShell)
+.\scripts\generate-keystore.ps1
+```
+
+Both accept `--help` with options for `--alias`, `--storepass`, `--keypass`,
+`--dname` and `--output` (`-Alias`, `-StorePass`, … on PowerShell). Then add
 four repository secrets (*Settings → Secrets → Actions*):
 
-| Secret | Value |
+| Secret | Value (printed by the script) |
 |---|---|
-| `ANDROID_KEYSTORE_BASE64` | `base64 -w0 sharethis.jks` |
+| `ANDROID_KEYSTORE_BASE64` | single-line Base64 of the `.jks` |
 | `ANDROID_KEYSTORE_PASSWORD` | keystore password |
-| `ANDROID_KEY_ALIAS` | key alias |
+| `ANDROID_KEY_ALIAS` | key alias (`upload` by default) |
 | `ANDROID_KEY_PASSWORD` | key password |
 
 Then tag and push: `git tag v1.0.0 && git push origin v1.0.0`.
 
-Generate a keystore once with:
+> **Back up the `.jks` offline** (USB drive / password manager) — losing it
+> means you can never publish updates under the same app signature again.
+> Never commit the `.jks` or `.base64.txt` files; both are git-ignored.
+
+Manual alternative (classic `keytool` invocation):
 
 ```bash
-keytool -genkeypair -v -keystore sharethis.jks -alias sharethis \
+keytool -genkeypair -v -keystore sharethis-release.jks -alias upload \
   -keyalg RSA -keysize 2048 -validity 10000
+# Portable single-line Base64 (works on GNU + macOS):
+base64 sharethis-release.jks | tr -d '\n\r'
 ```
 
 ## API-level behavior matrix
