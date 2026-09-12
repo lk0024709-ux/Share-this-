@@ -23,9 +23,13 @@ jobs:
         with:
           distribution: "temurin"
           java-version: "17"
-          cache: "gradle"
+          # No `cache: gradle` here on purpose: gradle/actions/setup-gradle below
+          # owns the Gradle cache. Enabling it in both actions registers two
+          # competing caches and makes restore/save unreliable.
 
       - name: Set up Gradle caching
+        # setup-gradle v4 additionally validates gradle/wrapper/gradle-wrapper.jar
+        # against the checksums published by Gradle on every execution.
         uses: gradle/actions/setup-gradle@v4
 
       - name: Install Android SDK packages (API 35)
@@ -33,23 +37,50 @@ jobs:
           yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Bootstrap Gradle Wrapper jar (if missing)
+      - name: Verify Gradle Wrapper
+        # The wrapper is committed to the repository (gradlew, gradlew.bat and
+        # gradle/wrapper/gradle-wrapper.jar + gradle-wrapper.properties for Gradle
+        # 8.9), so a checkout can run ./gradlew directly. The bootstrap below is
+        # only a safety net for a branch where the jar was stripped by a
+        # .gitignore/`git rm --cached`, which otherwise fails with
+        # "Error: Could not find or load main class org.gradle.wrapper.GradleWrapperMain".
         run: |
           if [ ! -s gradle/wrapper/gradle-wrapper.jar ]; then
-            echo "gradle-wrapper.jar missing — generating via official Gradle 8.9 distribution."
-            curl -sL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
+            echo "::warning::gradle-wrapper.jar missing - generating it from the official Gradle 8.9 distribution."
+            curl -sSL https://services.gradle.org/distributions/gradle-8.9-bin.zip -o /tmp/gradle.zip
             unzip -q /tmp/gradle.zip -d /tmp
             /tmp/gradle-8.9/bin/gradle wrapper --gradle-version 8.9 --no-daemon
           fi
+          # Git only restores the executable bit for files committed with mode 100755;
+          # chmod again so the step can never die on "Permission denied".
           chmod +x gradlew
-          ls -la gradle/wrapper/
+          test -x ./gradlew || { echo "::error::gradlew is missing or not executable"; exit 1; }
+          ls -la gradlew gradlew.bat gradle/wrapper/
+          ./gradlew --version
+
+      - name: Check release keystore availability
+        # The `secrets` context is NOT available in a step-level `if`, so probe the
+        # secret here and gate the signing steps on this boolean output. Writing
+        # `if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}` instead makes GitHub
+        # reject the entire workflow at parse time with
+        # "The workflow is not valid. ... Unrecognized named-value: 'secrets'.",
+        # which fails the run before any step (and any log) exists.
+        id: keystore
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "No ANDROID_KEYSTORE_BASE64 secret configured - the release APK is built unsigned." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Decode release keystore (optional signing)
         # To publish SIGNED release APKs, set these repository secrets:
         #   ANDROID_KEYSTORE_BASE64  (base64 of your .jks)
         #   ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
         # Without them the release APK is built unsigned.
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: steps.keystore.outputs.available == 'true'
         run: echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > app/release.keystore
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

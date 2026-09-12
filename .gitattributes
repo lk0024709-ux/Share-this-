@@ -1,0 +1,16 @@
+# Normalize line endings so the Gradle wrapper works identically on Linux,
+# macOS and Windows checkouts.
+* text=auto
+
+# The Unix wrapper script must be LF (a stray CR breaks the shebang),
+# the Windows one must be CRLF (cmd.exe mis-parses LF-only batch files).
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+gradle/wrapper/gradle-wrapper.properties text eol=lf
+
+# Never let git's text conversion corrupt these.
+*.jar binary
+*.png binary
+*.webp binary
+*.jks binary
+*.keystore binary
