@@ -13,6 +13,9 @@ jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout Repository
@@ -86,7 +89,21 @@ jobs:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
 
       - name: Run unit tests
-        run: ./gradlew testDebugUnitTest --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew testDebugUnitTest --stacktrace 2>&1 | tee /tmp/gradle-test.log
+
+      - name: Report test failures as PR comment
+        # Makes CI failures readable without downloading artifacts: extracts
+        # JUnit failures from the XML results and compile errors from the
+        # build log, then posts them on the pull request.
+        if: failure() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          python3 scripts/ci_test_failures.py app/build/test-results /tmp/gradle-test.log > /tmp/ci-failure-comment.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/ci-failure-comment.md || true
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
