@@ -162,4 +162,14 @@ object JsonCodec {
     }
 
     fun asInt(token: String?, default: Int = 0): Int = asLong(token, default.toLong()).toInt()
+
+    fun asBoolean(token: String?, default: Boolean = false): Boolean {
+        val raw = token?.trim() ?: return default
+        if (raw.startsWith("\"")) return unquote(raw)?.toBoolean() ?: default
+        return when (raw) {
+            "true", "1" -> true
+            "false", "0" -> false
+            else -> default
+        }
+    }
 }
